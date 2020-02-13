@@ -1,0 +1,6 @@
+{
+    "name":"cfI18N",
+    "app":{
+        "cfengine":"lucee"
+    }
+}
