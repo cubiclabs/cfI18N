@@ -1,5 +1,18 @@
 component{
 	
+	/*
+	ICU
+	https://github.com/unicode-org/icu/
+	http://site.icu-project.org/
+
+	ICU message formatting
+	http://userguide.icu-project.org/formatparse/messages
+	https://medium.com/i18n-and-l10n-resources-for-developers/the-missing-guide-to-the-icu-message-format-d7f8efc50bab
+	http://www.unicode.org/cldr/charts/latest/supplemental/language_plural_rules.html
+	
+	*/
+
+
 	variables._localResourcePath = "resources";
 	variables._icuJarPath = "java/icu4j-65_1.jar";
 	variables._resources = {}; // holds all our locale keys
