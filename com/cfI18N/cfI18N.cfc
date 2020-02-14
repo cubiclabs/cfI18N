@@ -1,11 +1,15 @@
 component{
+	
+	variables._localResourcePath = "resources";
+	variables._icuJarPath = "java/icu4j-65_1.jar";
+	variables._resources = {}; // holds all our locale keys
+	variables._plurals = {}; // holds JSON plural configuration for locales
 
 	variables._settings = {
 		"resourcePath": getDefaultResourcePath(),
-		"defaultLocale": "en"
+		"defaultLocale": "en",
+		"format": "icu"
 	};
-	
-	variables._resources = {};
 	
 	/**
 	* @hint constructor
@@ -34,26 +38,43 @@ component{
 	* @hint Returns path to the default schema storage location
 	*/
 	public string function getDefaultResourcePath(){
-		return getLocalPath() & "resources\";
+		return getLocalPath() & variables._localResourcePath & "\";
 	}
 
 	/** 
 	* @hint Returns the absolute path to a given cfc
 	*/
-	public string function getLocalPath(any o=this){
-		local.path = listToArray(getMetaData(arguments.o).path, "\");
-		arrayDeleteAt(local.path, arrayLen(local.path)); // remove file name
-		return arrayToList(local.path, "\") & "\";
+	public string function getLocalPath(boolean absolute=true){
+		if(arguments.absolute){
+			// absolute path
+			local.path = listToArray(getMetaData(this).path, "\");
+			arrayDeleteAt(local.path, arrayLen(local.path)); // remove file name
+			return arrayToList(local.path, "\") & "\";
+		}else{
+			// relative path
+			local.path = listToArray(getMetaData(this).name, ".");
+			arrayDeleteAt(local.path, arrayLen(local.path)); // remove file name
+			return arrayToList(local.path, "/") & "/";
+		}
 	}
 
 	/** 
-	* @hint returns the default locale as a language and country code
+	* @hint returns the default locale as a language, country and variant code
 	*/
 	public string function getDefaultLocale(){
 		local.locale = getPageContext().getResponse().getLocale();
 		local.ret = local.locale.getLanguage();
 		if(len(local.locale.getCountry())) local.ret &= "_" & local.locale.getCountry();
+		if(len(local.locale.getVariant())) local.ret &= "_" & local.locale.getVariant();
 		return local.ret;
+	}
+
+	/** 
+	* @hint returns a jAva lacal object
+	*/
+	public any function jLocale(string locale){
+		local.split = splitLocale(arguments.locale);
+		return createObject("java","java.util.Locale").init(local.split.language, local.split.country, local.split.variant);
 	}
 
 	/** 
@@ -101,15 +122,100 @@ component{
 	}
 
 	/** 
-	* @hint reads our resource files
+	* @hint returns our locale plurals defined from JSON translation files
 	*/
-	public void function readResources(){
-		local.files = directoryList(getSetting("resourcePath"), false, "path");
-		for(local.file in local.files){
-			local.resource = deserializeJSON(fileRead(local.file, "utf-8"));
-			variables._resources[local.resource.locale] = flattenResourceKeys(local.resource);
+	public struct function getPlurals(string locale=""){
+		if(len(arguments.locale)){
+			return variables._plurals[arguments.locale];
 		}
+		return variables._plurals;
 	}
+
+	/** 
+	* @hint reads a Java resource bundle and returns the keys that it contains
+	*/
+	public struct function readResourceBundle(string path){
+
+		// define our return struct
+		local.name = listFirst(listLast(arguments.path, "\"), ".");
+		local.ret = {
+			"name": local.name,
+			"baseName": listFirst(local.name, "_"),
+			"locale": getSetting("defaultLocale"),
+			"keys": {}
+		};
+
+		// get a locale from the bundle file name
+		if(listLen(local.name, "_") GT 1){
+			local.ret.locale = right(local.name, len(local.name)-len(local.ret.baseName)-1);
+		}
+		
+		// open our file stream
+		local.fileStream = createObject("java","java.io.FileInputStream").init(arguments.path);
+		// open an input stream using UTF-8
+		local.inputStream = createObject("java", "java.io.InputStreamReader").init(local.fileStream, "UTF8");
+		// open a buffereed reader
+		local.reader = createObject("java", "java.io.BufferedReader").init(local.inputStream);
+
+		try{
+			// read our resource bundle
+			local.resourceBundle = createObject("java","java.util.PropertyResourceBundle").init(local.reader);
+			
+			// get the keys from the bundle
+			local.keys = local.resourceBundle.getKeys();
+			
+			// extract our keys
+			while(local.keys.hasMoreElements()){
+				local.key = local.keys.nextElement();
+				local.value = local.resourceBundle.handleGetObject(local.key);
+				local.ret.keys[local.key] = local.value;
+			}
+		}
+		catch(any e){
+			// if we have an error, we need to ensure that the file stream gets closed
+			local.reader.close();
+			rethrow;
+		}
+		
+		// close the input stream
+		local.reader.close();
+
+		// return our data
+		return local.ret;
+	}
+
+
+	/** 
+	* @hint reads a JSON file and returns the keys that it contains
+	*/
+	public struct function readJSONBundle(string path){
+
+		// define our return struct
+		local.name = listFirst(listLast(arguments.path, "\"), ".");
+		local.ret = {
+			"name": local.name,
+			"baseName": listFirst(local.name, "_"),
+			"locale": getSetting("defaultLocale"),
+			"plurals": "",
+			"keys": {}
+		};
+
+		// read our JSON file
+		local.resource = fileRead(arguments.path, "utf-8");
+		if(isJSON(local.resource)){
+			local.resource = deserializeJSON(local.resource);
+			// flatten any nested keys
+			flattenResourceKeys(local.resource);
+			local.ret.keys = local.resource.lookup;
+
+			if(structKeyExists(local.resource, "plurals")){
+				local.ret.plurals = local.resource.plurals;
+			}
+		}
+
+		return local.ret;
+	}
+
 
 	/** 
 	* @hint creates a lookup table for key values by flattening nested keys
@@ -134,47 +240,146 @@ component{
 	}
 
 	/** 
+	* @hint reads our resource files
+	*/
+	public void function readResources(){
+		local.files = directoryList(getSetting("resourcePath"), false, "path");
+		for(local.file in local.files){
+
+			if(listLast(local.file, ".") IS "properties"){
+				// java resource bundle
+				local.bundle = readResourceBundle(local.file);
+			}else{
+				// assume a JSON format
+				local.bundle = readJSONBundle(local.file);
+				if(isStruct(local.bundle.plurals)){
+					variables._plurals[local.bundle.locale] = local.bundle.plurals;
+				}
+			}
+
+			if(!structKeyExists(variables._resources, local.bundle.locale)){
+				variables._resources[local.bundle.locale] = {};
+			}
+
+			structAppend(variables._resources[local.bundle.locale], local.bundle.keys);
+		}
+	}
+
+	/** 
 	* @hint searches our locale resources for a given key
 	*/
-	public string function getText(
+	public struct function findKey(
 		string key, 
-		struct args={}, 
-		numeric n=0, 
-		string locale=getDefaultLocale()){
+		string locale=getDefaultLocale(),
+		string default="NOT FOUND"){
 
-		// get our locale search order
-		local.localesToSearch = localePreference(arguments.locale);
+		local.ret = {
+			"found": false,
+			"value": arguments.default,
+			"locale": arguments.locale,
+			"localesToSearch": localePreference(arguments.locale)
+		};
 
-		for(local.loc in local.localesToSearch){
+		// scan our locales for a matching key
+		for(local.loc in local.ret.localesToSearch){
 			if(structKeyExists(variables._resources, local.loc)){
 				local.resource = getResource(local.loc);
 
-				if(structKeyExists(local.resource.lookup, arguments.key)){
+				if(structKeyExists(local.resource, arguments.key)){
 					// we have a match
-					local.match = local.resource.lookup[arguments.key];
-
-					// check for a pluralised translation
-					if(isArray(local.match)){
-						// find our plural position using the number of plurals that we have
-						local.plural = local.resource.plurals[arrayLen(local.match)];
-						local.matchedI = evaluate(local.plural) + 1;
-						local.match = local.match[local.matchedI];
-					}
-
-					// relace arg strings
-					for(local.argKey in structKeyArray(arguments.args)){
-						local.match = replaceNoCase(local.match, "{" & local.argKey & "}", arguments.args[local.argKey], "ALL");
-					}
-					// replace 'n'
-					local.match = replaceNoCase(local.match, "{n}", arguments.n, "ALL");
-
-					return local.match;
+					local.ret.found = true;
+					local.ret.locale = local.loc;
+					local.ret.value = local.resource[arguments.key];
+					return local.ret;
 				}
 			}
 		}
 
-		return "NOT FOUND";
+		return local.ret;
 	}
 
 
+
+	/** 
+	* @hint searches our locale resources for a given key and formats the message
+	*/
+	public string function getText(
+		string key, 
+		any args={}, 
+		string locale=getDefaultLocale(),
+		string messageFormat=getSetting("format"),
+		string default="NOT FOUND"){
+
+		local.match = findKey(arguments.key, arguments.locale, arguments.default);
+
+		if(local.match.found){
+
+			// po formatted string??
+			if(isArray(local.match.value)){
+				// make sure that we have 'n' defined
+				local.n = 0;
+				if(isStruct(arguments.args) AND structKeyExists(arguments.args, "n")){
+					local.n = val(arguments.args.n);
+				}
+				// find our plural position using the number of plurals that we have
+				local.plural = getPlurals(local.match.locale)[arrayLen(local.match.value)];
+				local.matchedI = evaluate(local.plural) + 1;
+				local.match.value = local.match.value[local.matchedI];
+			}
+
+			// replace arg strings
+			if(isStruct(arguments.args)){
+				for(local.argKey in structKeyArray(arguments.args)){
+					local.match.value = replaceNoCase(local.match.value, "{" & local.argKey & "}", arguments.args[local.argKey], "ALL");
+				}
+				// replace 'n'
+				//local.match = replaceNoCase(local.match, "{n}", local.n, "ALL");
+			}
+
+			return this.format(local.match.value, arguments.args, arguments.locale, arguments.messageFormat);
+	
+		}
+
+		return arguments.default;
+	}
+
+	/** 
+	* @hint formats a message using a java MessageFormat
+	*/
+	public string function format(
+		string msg, 
+		any args={}, 
+		string locale=getDefaultLocale(),
+		string messageFormat=getSetting("format")){
+
+		// get a java locale object
+		local.formatLocale = jLocale(arguments.locale);
+		
+		// what formatter are we using
+		switch(arguments.messageFormat){
+			case "java":
+				// Java message formater
+				local.msgFormat = createObject("java","java.text.MessageFormat").init(arguments.msg, local.formatLocale);
+				break;
+			default:
+				// enhanced icu4j message formatter
+				if(server.coldfusion.productname IS "Lucee"){
+					// Lucee can create Java objects using a path to the jar
+					local.msgFormat = createObject("java","com.ibm.icu.text.MessageFormat", getLocalPath(false) & variables._icuJarPath).init(arguments.msg, local.formatLocale);
+				}else{
+					// ACF - jar needs to be added to class path
+					local.msgFormat = createObject("java","com.ibm.icu.text.MessageFormat").init(arguments.msg, local.formatLocale);
+				}
+		}
+
+		// get our args into a Java format
+		if(isArray(arguments.args)){
+			arguments.args = arguments.args.toArray();
+		}
+
+		// format our message
+		return local.msgFormat.format(arguments.args);
+	}
+
+	
 }
