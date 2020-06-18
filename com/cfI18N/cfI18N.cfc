@@ -64,10 +64,10 @@ component{
 			arrayDeleteAt(local.path, arrayLen(local.path)); // remove file name
 			return arrayToList(local.path, "\") & "\";
 		}else{
-			// relative path
+			// relative path from root
 			local.path = listToArray(getMetaData(this).name, ".");
 			arrayDeleteAt(local.path, arrayLen(local.path)); // remove file name
-			return arrayToList(local.path, "/") & "/";
+			return "/" & arrayToList(local.path, "/") & "/";
 		}
 	}
 
